@@ -203,8 +203,16 @@ impl Logger {
         self.inner.lock().unwrap().trace_sockets.contains_key(&id)
     }
 
+    pub(crate) fn colour(&self) -> bool {
+        self.colour
+    }
+
+    pub(crate) fn show_timestamp(&self) -> bool {
+        self.show_timestamp
+    }
+
     /// Returns (print, can_return) — Go loggingNecessary.
-    pub fn logging_necessary(&self, ll: Level) -> (bool, bool) {
+    fn logging_necessary(&self, ll: Level) -> (bool, bool) {
         let inner = self.inner.lock().unwrap();
         let print = ll >= inner.level;
         if !inner.trace_sockets.is_empty() || !inner.samplers.is_empty() {

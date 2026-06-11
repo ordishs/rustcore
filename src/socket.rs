@@ -108,8 +108,11 @@ fn handle(logger: &'static Logger, stream: UnixStream) {
                 let _ = write_to(&mut w, "\nStatus:\n");
                 let _ = write_to(&mut w, &format!("  Log level: {}\n", logger.get_level()));
                 let _ = write_to(&mut w, &format!("  Package: {}\n", logger.package_name()));
-                let _ = write_to(&mut w, "  Colour: true\n");
-                let _ = write_to(&mut w, "  Show timestamps: true\n");
+                let _ = write_to(&mut w, &format!("  Colour: {}\n", logger.colour()));
+                let _ = write_to(
+                    &mut w,
+                    &format!("  Show timestamps: {}\n", logger.show_timestamp()),
+                );
                 let _ = write_to(&mut w, "\n");
             }
             "quit" | "exit" => return,
