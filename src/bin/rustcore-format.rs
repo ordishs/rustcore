@@ -269,7 +269,7 @@ fn write_settings<W: Write>(writer: W, settings: &[Setting]) -> io::Result<()> {
         for variant in &setting.variants {
             let prefix = if variant.commented { "# " } else { "" };
             let length = if variant.commented {
-                max_key_length - 2
+                max_key_length.saturating_sub(2)
             } else {
                 max_key_length
             };
@@ -386,6 +386,26 @@ mod tests {
     fn test_clean_multi_values() {
         let v = "1|2|3";
         assert_eq!(clean_multi_values(v), "1 | 2 | 3");
+    }
+
+    #[test]
+    fn test_malformed_compact_group() {
+        // A duplicate "# @group: X compact" marker resets max_key_length to 0
+        // before "# @endgroup" back-patches it; the commented variant's width
+        // adjustment must not underflow. Output verified against the Go tool.
+        let input = "# @group: G1 compact
+#aaaa=1
+# @group: G1 compact
+b=2
+# @endgroup
+";
+
+        let output = run(input);
+
+        assert_eq!(
+            output,
+            "# @group: G1 compact\n# aaaa = 1\nb = 2\n# @endgroup\n"
+        );
     }
 
     #[test]
