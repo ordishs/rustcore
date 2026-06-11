@@ -2,9 +2,11 @@ pub mod config;
 pub mod logger;
 pub mod sampler;
 pub mod socket;
+pub mod stats;
 pub mod utils;
 
 pub use logger::{log, Level, Logger};
+pub use stats::{current_time, new_stat, root_stat, start_stats_server};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
