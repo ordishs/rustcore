@@ -287,8 +287,16 @@ pub(crate) fn average(total: Duration, count: i64) -> Duration {
     if count == 0 {
         Duration::ZERO
     } else {
-        Duration::from_nanos((total.as_nanos() as i64 / count) as u64)
+        Duration::from_nanos((total.as_nanos() / count as u128) as u64)
     }
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 pub(crate) fn add_thousands_operator(num: i64) -> String {
@@ -413,7 +421,8 @@ pub fn render_stats_page(keys_param: &str) -> String {
         "<form border='0' cellpadding='0' action='{prefix}reset' method='get'>\r\n"
     ));
     p.push_str(&format!(
-        "<input type='button' value='Reset Statistics' onClick='window.location.replace(\"reset?key={keys_param}\");'>\r\n"
+        "<input type='button' value='Reset Statistics' onClick='window.location.replace(\"reset?key={}\");'>\r\n",
+        html_escape(keys_param)
     ));
     p.push_str("</form>\r\n</td>\r\n</tr>\r\n</table>\r\n");
 
@@ -468,12 +477,14 @@ pub fn render_stats_page(keys_param: &str) -> String {
         let child = &children[key];
         let snap = child.snapshot();
         p.push_str("<tr>\r\n");
+        let escaped_key = html_escape(key);
         if child.has_children() {
             p.push_str(&format!(
-                "<td><a href='{prefix}stats?key={keys_param_link}{key}'>{key}</a></td>\r\n"
+                "<td><a href='{prefix}stats?key={}{escaped_key}'>{escaped_key}</a></td>\r\n",
+                html_escape(&keys_param_link)
             ));
         } else {
-            p.push_str(&format!("<td>{key}</td>\r\n"));
+            p.push_str(&format!("<td>{escaped_key}</td>\r\n"));
         }
         p.push_str(&format!(
             "<td align='right'>{}</td>\r\n",
@@ -650,5 +661,11 @@ mod tests {
     fn thousands() {
         assert_eq!(add_thousands_operator_trim(1234567), "1,234,567");
         assert_eq!(add_thousands_operator_trim(999), "999");
+    }
+
+    #[test]
+    fn render_escapes_key_param() {
+        let page = render_stats_page("\"><script>");
+        assert!(!page.contains("<script>"));
     }
 }
