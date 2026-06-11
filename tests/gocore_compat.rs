@@ -26,8 +26,9 @@
 
 #[test]
 fn gocore_settings_parity() {
-    // Remove any env vars that might bleed in from the host environment and
-    // shadow the fixture file values.
+    // ----------------------------------------------------------------
+    // SETUP: clear any host env vars that could shadow fixture values
+    // ----------------------------------------------------------------
     let fixture_keys = [
         "SETTINGS_CONTEXT",
         "SETTINGS_APPLICATION",
@@ -44,6 +45,12 @@ fn gocore_settings_parity() {
         "address",
         "app",
         "setting",
+        // needed for TestCheckDotEnv — remove so dotenvy can set it
+        "ENV_TEST",
+        // needed for TestEmptyEnvOverride / TestEnvWithVariables
+        "first",
+        "last",
+        "fullname",
     ];
     for k in &fixture_keys {
         unsafe {
@@ -58,6 +65,7 @@ fn gocore_settings_parity() {
 
     // chdir into the fixture directory so rustcore's discovery walks up from here
     // and finds exactly these two files (no stray settings.conf above /tmp).
+    // The .env file must be present in cwd BEFORE config() is first called.
     std::env::set_current_dir(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gocore"),
     )
@@ -66,7 +74,12 @@ fn gocore_settings_parity() {
     let c = rustcore::config::config();
     assert_eq!(c.context(), "dev");
 
-    // Values verified against gocore output (see file header).
+    // ================================================================
+    // PHASE 1: read-only parity assertions (no mutations)
+    // All values must be checked before the mutation phase below.
+    // ================================================================
+
+    // --- Original 12 parity values verified against gocore output ---
     assert_eq!(c.get("name").as_deref(), Some("Simon"));
     assert_eq!(c.get("city").as_deref(), Some("Paris"));
     assert_eq!(c.get("number").as_deref(), Some("5042"));
@@ -83,4 +96,217 @@ fn gocore_settings_parity() {
     assert_eq!(c.get("tel").as_deref(), Some("20289202982"));
     assert_eq!(c.get("address").as_deref(), Some("1 The Main Street"));
     assert_eq!(c.get("app").as_deref(), Some("app"));
+
+    // --- TestTestConfig: settings_test.conf overrides settings.conf ---
+    // settings.conf has setting=simon; settings_test.conf has setting=test
+    assert_eq!(
+        c.get("setting").as_deref(),
+        Some("test"),
+        "TestTestConfig: settings_test.conf must override settings.conf"
+    );
+
+    // --- TestCheckDotEnv: .env file loaded at startup ---
+    // .env in cwd contains ENV_TEST=123; dotenvy loads it before config() returns
+    assert_eq!(
+        c.get("ENV_TEST").as_deref(),
+        Some("123"),
+        "TestCheckDotEnv: .env must be loaded and ENV_TEST=123"
+    );
+
+    // --- TestEmpty: empty value is found (not None) ---
+    // settings_local.conf has: empty =
+    assert_eq!(
+        c.get("empty").as_deref(),
+        Some(""),
+        "TestEmpty: empty value must be Some(\"\") not None"
+    );
+
+    // --- TestGetMagicNumber: EHE-encrypted integer decrypts via typed getter ---
+    // settings_local.conf has: magicNumber = *EHE*...
+    assert_eq!(
+        c.get_parsed::<i32>("magicNumber").unwrap(),
+        Some(42),
+        "TestGetMagicNumber: decrypted magicNumber must be 42"
+    );
+
+    // --- TestGetDuration ---
+    // settings_local.conf: millis=2s, millisErr=2fg
+    assert_eq!(
+        c.get_duration("millis").unwrap(),
+        Some(std::time::Duration::from_secs(2)),
+        "TestGetDuration: millis=2s must parse to 2 seconds"
+    );
+    assert!(
+        c.get_duration("millisErr").is_err(),
+        "TestGetDuration: millisErr=2fg must be an error"
+    );
+
+    // --- TestURL1: plain credentials ---
+    // settings_local.conf: url1 = "http://user:password@localhost:8080"
+    {
+        let u = c
+            .get_url("url1")
+            .expect("url1 parse must not error")
+            .expect("url1 must be present");
+        assert_eq!(u.scheme(), "http", "TestURL1: scheme");
+        assert_eq!(u.username(), "user", "TestURL1: username");
+        assert_eq!(u.password(), Some("password"), "TestURL1: password");
+        assert_eq!(u.host_str(), Some("localhost"), "TestURL1: host");
+        assert_eq!(u.port(), Some(8080), "TestURL1: port");
+        // url::Url normalises authority-form URLs to path "/" (Go stores "");
+        // both represent the root — this is a library difference, not a bug.
+        assert!(
+            u.path() == "/" || u.path().is_empty(),
+            "TestURL1: path must be / or empty"
+        );
+    }
+
+    // --- TestURLWithEncryptedPassword: *EHE* password token inside URL ---
+    // settings_local.conf: url2 = "http://user:*EHE*...<ciphertext>...@localhost:8080"
+    // The key compat case: encrypted credential in a URL decrypts to "password"
+    {
+        let u = c
+            .get_url("url2")
+            .expect("url2 parse must not error")
+            .expect("url2 must be present");
+        assert_eq!(u.scheme(), "http", "TestURLWithEncryptedPassword: scheme");
+        assert_eq!(
+            u.username(),
+            "user",
+            "TestURLWithEncryptedPassword: username"
+        );
+        assert_eq!(
+            u.password(),
+            Some("password"),
+            "TestURLWithEncryptedPassword: decrypted password"
+        );
+        assert_eq!(
+            u.host_str(),
+            Some("localhost"),
+            "TestURLWithEncryptedPassword: host"
+        );
+        assert_eq!(u.port(), Some(8080), "TestURLWithEncryptedPassword: port");
+        assert!(
+            u.path() == "/" || u.path().is_empty(),
+            "TestURLWithEncryptedPassword: path must be / or empty"
+        );
+    }
+
+    // --- TestURL3: p2p scheme, no credentials ---
+    // settings_local.conf: url3 = "p2p://localhost:8333"
+    {
+        let u = c
+            .get_url("url3")
+            .expect("url3 parse must not error")
+            .expect("url3 must be present");
+        assert_eq!(u.scheme(), "p2p", "TestURL3: scheme");
+        assert_eq!(u.username(), "", "TestURL3: username");
+        assert_eq!(u.password(), None, "TestURL3: password");
+        assert_eq!(u.host_str(), Some("localhost"), "TestURL3: host");
+        assert_eq!(u.port(), Some(8333), "TestURL3: port");
+        assert!(
+            u.path() == "/" || u.path().is_empty(),
+            "TestURL3: path must be / or empty"
+        );
+    }
+
+    // --- TestURL4: zmq scheme, no credentials ---
+    // settings_local.conf: url4 = "zmq://localhost:28332"
+    {
+        let u = c
+            .get_url("url4")
+            .expect("url4 parse must not error")
+            .expect("url4 must be present");
+        assert_eq!(u.scheme(), "zmq", "TestURL4: scheme");
+        assert_eq!(u.username(), "", "TestURL4: username");
+        assert_eq!(u.password(), None, "TestURL4: password");
+        assert_eq!(u.host_str(), Some("localhost"), "TestURL4: host");
+        assert_eq!(u.port(), Some(28332), "TestURL4: port");
+        assert!(
+            u.path() == "/" || u.path().is_empty(),
+            "TestURL4: path must be / or empty"
+        );
+    }
+
+    // --- TestAlternativeContext: config_for_context("special") reads city.special ---
+    // settings.conf has: city.special = Madrid
+    {
+        let sc = rustcore::config::config_for_context("special");
+        assert_eq!(
+            sc.get("city").as_deref(),
+            Some("Madrid"),
+            "TestAlternativeContext: city under context 'special' must be Madrid"
+        );
+        // default context is unaffected
+        assert_eq!(
+            c.get("city").as_deref(),
+            Some("Paris"),
+            "TestAlternativeContext: default context city must still be Paris"
+        );
+    }
+
+    // ================================================================
+    // PHASE 2: mutation assertions (order matters — after all Phase 1 reads)
+    // ================================================================
+
+    // --- TestDynamicVariables: set city, verify embedded re-resolves ---
+    {
+        assert_eq!(
+            c.get("embedded").as_deref(),
+            Some("Simon lives in Paris"),
+            "TestDynamicVariables: before set, embedded must resolve to Paris"
+        );
+        c.set("city", "London");
+        assert_eq!(
+            c.get("embedded").as_deref(),
+            Some("Simon lives in London"),
+            "TestDynamicVariables: after set(city=London), embedded must resolve to London"
+        );
+    }
+
+    // --- TestEmptyEnvOverride: empty env var overrides non-empty config value ---
+    {
+        unsafe {
+            std::env::set_var("city", "");
+        }
+        // env var "" wins over any config value
+        assert_eq!(
+            c.get("city").as_deref(),
+            Some(""),
+            "TestEmptyEnvOverride: empty env var city must override config"
+        );
+    }
+
+    // --- TestEnvWithVariables: env var with ${var} tokens is expanded ---
+    {
+        unsafe {
+            std::env::set_var("city", "New York ${address}");
+        }
+        // address is in settings.conf: address = 1 The Main Street
+        assert_eq!(
+            c.get("city").as_deref(),
+            Some("New York 1 The Main Street"),
+            "TestEnvWithVariables: city env with ${{address}} must expand"
+        );
+
+        unsafe {
+            std::env::set_var("address", "2 The Main Street");
+        }
+        assert_eq!(
+            c.get("city").as_deref(),
+            Some("New York 2 The Main Street"),
+            "TestEnvWithVariables: after address update, city must re-expand"
+        );
+
+        unsafe {
+            std::env::set_var("first", "Simon");
+            std::env::set_var("last", "Ordish");
+            std::env::set_var("fullname", "${first} ${last}");
+        }
+        assert_eq!(
+            c.get("fullname").as_deref(),
+            Some("Simon Ordish"),
+            "TestEnvWithVariables: ${{first}} ${{last}} must expand to 'Simon Ordish'"
+        );
+    }
 }
