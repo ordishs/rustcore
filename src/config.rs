@@ -247,6 +247,71 @@ impl Configuration {
         }
         out
     }
+
+    pub fn get_parsed<T: std::str::FromStr>(&self, key: &str) -> Result<Option<T>, ConfigError>
+    where
+        T::Err: fmt::Display,
+    {
+        match self.get(key) {
+            None => Ok(None),
+            Some(s) if s.is_empty() => Ok(None),
+            Some(s) => s.parse::<T>().map(Some).map_err(|e| ConfigError::Parse {
+                key: key.to_string(),
+                value: s,
+                message: e.to_string(),
+            }),
+        }
+    }
+
+    pub fn get_bool(&self, key: &str, default: bool) -> bool {
+        match self.get(key) {
+            None => default,
+            Some(s) if s.is_empty() => default,
+            Some(s) => crate::utils::parse_go_bool(&s).unwrap_or(false),
+        }
+    }
+
+    pub fn get_duration(&self, key: &str) -> Result<Option<std::time::Duration>, ConfigError> {
+        match self.get(key) {
+            None => Ok(None),
+            Some(s) if s.is_empty() => Ok(None),
+            Some(s) => crate::utils::parse_go_duration(&s)
+                .map(Some)
+                .map_err(ConfigError::InvalidDuration),
+        }
+    }
+
+    pub fn get_multi(&self, key: &str, sep: &str) -> Option<Vec<String>> {
+        match self.get(key) {
+            None => None,
+            Some(s) if s.is_empty() => None,
+            Some(s) => Some(s.split(sep).map(|i| i.trim().to_string()).collect()),
+        }
+    }
+
+    pub fn get_url(&self, key: &str) -> Result<Option<url::Url>, ConfigError> {
+        let Some(mut s) = self.get(key) else {
+            return Ok(None);
+        };
+        if s.is_empty() {
+            return Ok(None);
+        }
+        static RE: LazyLock<regex::Regex> =
+            LazyLock::new(|| regex::Regex::new(r"\*EHE\*[a-zA-Z0-9]+").unwrap());
+        let tokens: Vec<String> = RE.find_iter(&s).map(|m| m.as_str().to_string()).collect();
+        for token in tokens {
+            if let Ok(decrypted) = crate::utils::secure_settings::decrypt_setting(&token) {
+                let plain = decrypted
+                    .strip_prefix("*EHE*")
+                    .unwrap_or(&decrypted)
+                    .to_string();
+                s = s.replacen(&token, &plain, 1);
+            }
+        }
+        url::Url::parse(&s)
+            .map(Some)
+            .map_err(|e| ConfigError::InvalidUrl(format!("{s}: {e}")))
+    }
 }
 
 #[cfg(test)]
@@ -377,5 +442,78 @@ mod core_tests {
         c.get("city");
         let r = c.requested();
         assert_eq!(r, "city=Paris\nname=Simon\n");
+    }
+}
+
+#[cfg(test)]
+mod typed_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn cfg() -> Configuration {
+        let mut m = std::collections::HashMap::new();
+        for (k, v) in [
+            ("number", "5042"),
+            ("float", "3.14"),
+            ("flag", "true"),
+            ("badflag", "notabool"),
+            ("badnum", "xyz"),
+            ("timeout", "1h30m"),
+            ("multi", "simon, peter, paul"),
+            ("dburl", "postgres://user:pass@localhost:5432/db"),
+        ] {
+            m.insert(k.to_string(), v.to_string());
+        }
+        Configuration::new_with(m, "dev", "")
+    }
+
+    #[test]
+    #[allow(clippy::approx_constant)]
+    fn numbers() {
+        let c = cfg();
+        assert_eq!(c.get_parsed::<i32>("number").unwrap(), Some(5042));
+        assert_eq!(c.get_parsed::<u64>("number").unwrap(), Some(5042));
+        assert_eq!(c.get_parsed::<f64>("float").unwrap(), Some(3.14));
+        assert_eq!(c.get_parsed::<i32>("missing").unwrap(), None);
+        assert!(c.get_parsed::<i32>("badnum").is_err());
+        assert!(c.get_parsed::<u8>("number").is_err()); // 5042 overflows u8
+    }
+
+    #[test]
+    fn bools() {
+        let c = cfg();
+        assert!(c.get_bool("flag", false));
+        assert!(!c.get_bool("badflag", true)); // unparseable -> false (Go parity)
+        assert!(c.get_bool("missing", true)); // default
+        assert!(!c.get_bool("missing", false));
+    }
+
+    #[test]
+    fn durations() {
+        let c = cfg();
+        assert_eq!(
+            c.get_duration("timeout").unwrap(),
+            Some(Duration::from_secs(5400))
+        );
+        assert_eq!(c.get_duration("missing").unwrap(), None);
+    }
+
+    #[test]
+    fn multi() {
+        let c = cfg();
+        assert_eq!(
+            c.get_multi("multi", ",").unwrap(),
+            vec!["simon", "peter", "paul"]
+        );
+        assert_eq!(c.get_multi("missing", ","), None);
+    }
+
+    #[test]
+    fn urls() {
+        let c = cfg();
+        let u = c.get_url("dburl").unwrap().unwrap();
+        assert_eq!(u.scheme(), "postgres");
+        assert_eq!(u.host_str(), Some("localhost"));
+        assert_eq!(c.get_url("missing").unwrap(), None);
     }
 }
