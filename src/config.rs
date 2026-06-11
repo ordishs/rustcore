@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex, RwLock};
 
 use crate::stdlog;
 
@@ -38,7 +40,6 @@ impl fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// Parse settings lines into the map (Go processFile parsing semantics).
-#[allow(dead_code)]
 fn parse_into(m: &mut HashMap<String, String>, path: &Path, content: &str) {
     for (line_num, raw) in content.split('\n').enumerate() {
         if raw.is_empty() {
@@ -68,7 +69,6 @@ fn parse_into(m: &mut HashMap<String, String>, path: &Path, content: &str) {
 /// Walk from start_dir upward to the root looking for filename; parse into m when found.
 /// Ok(Some(path)) when found, Ok(None) when not found anywhere, Err on a read error
 /// that is not NotFound (Go aborts in that case).
-#[allow(dead_code)]
 fn find_and_parse(
     start_dir: &Path,
     filename: &str,
@@ -92,7 +92,6 @@ fn find_and_parse(
 }
 
 /// Full Go discovery: executable dir upward, then cwd upward.
-#[allow(dead_code)]
 fn process_file(
     m: &mut HashMap<String, String>,
     filename: &str,
@@ -108,12 +107,8 @@ fn process_file(
     find_and_parse(&cwd, filename, m)
 }
 
-use std::sync::atomic::AtomicU64;
-use std::sync::{LazyLock, Mutex, RwLock};
-
 type Listener = Box<dyn Fn(&str, &str) + Send + Sync>;
 
-#[allow(dead_code)]
 pub struct Configuration {
     confs: RwLock<HashMap<String, String>>,
     context: String,
@@ -127,7 +122,6 @@ pub struct Configuration {
 }
 
 impl Configuration {
-    #[allow(dead_code)]
     pub(crate) fn new_with(confs: HashMap<String, String>, context: &str, app: &str) -> Self {
         Configuration {
             confs: RwLock::new(confs),
@@ -311,6 +305,94 @@ impl Configuration {
         url::Url::parse(&s)
             .map(Some)
             .map_err(|e| ConfigError::InvalidUrl(format!("{s}: {e}")))
+    }
+
+    pub fn set(&self, key: &str, value: &str) -> Option<String> {
+        let old = {
+            let mut confs = self.confs.write().unwrap();
+            confs.insert(key.to_string(), value.to_string())
+        };
+        for (_, l) in self.listeners.read().unwrap().iter() {
+            l(key, value);
+        }
+        old
+    }
+
+    pub fn unset(&self, key: &str) -> Option<String> {
+        let old = {
+            let mut confs = self.confs.write().unwrap();
+            confs.remove(key)
+        };
+        for (_, l) in self.listeners.read().unwrap().iter() {
+            l(key, "");
+        }
+        old
+    }
+
+    pub fn add_listener(&self, f: impl Fn(&str, &str) + Send + Sync + 'static) -> u64 {
+        let id = self.next_listener_id.fetch_add(1, Ordering::SeqCst);
+        self.listeners.write().unwrap().push((id, Box::new(f)));
+        id
+    }
+
+    pub fn remove_listener(&self, id: u64) {
+        self.listeners.write().unwrap().retain(|(i, _)| *i != id);
+    }
+
+    pub fn get_all(&self) -> HashMap<String, String> {
+        let confs = self.confs.read().unwrap();
+        let mut m = HashMap::new();
+        m.insert("_SETTINGS_CONTEXT".to_string(), self.context.clone());
+        for (k, v) in confs.iter() {
+            m.insert(k.clone(), std::env::var(k).unwrap_or_else(|_| v.clone()));
+        }
+        m
+    }
+
+    pub fn stats(&self) -> String {
+        static MASK_RE: LazyLock<regex::Regex> =
+            LazyLock::new(|| regex::Regex::new(r"\*EHE\*[a-zA-Z0-9]+").unwrap());
+
+        let mut out = String::from("\nCMDLINE\n-------\n");
+        for (i, arg) in std::env::args().enumerate() {
+            out.push_str(&format!("{i:2}: {arg}\n"));
+        }
+
+        out.push_str("\nSETTINGS_ENV\n------------\nContext:     ");
+        if self.context != "dev" {
+            out.push_str(&self.context);
+        } else {
+            out.push_str("Not set (dev)");
+        }
+        out.push_str("\nApplication: ");
+        if !self.app.is_empty() {
+            out.push_str(&self.app);
+        } else {
+            out.push_str("Not set");
+        }
+        out.push_str("\n\nSETTINGS\n--------\n");
+
+        let mut base_keys: Vec<String> = {
+            let confs = self.confs.read().unwrap();
+            let set: std::collections::HashSet<String> = confs
+                .keys()
+                .map(|k| k.split('.').next().unwrap_or(k).to_string())
+                .collect();
+            set.into_iter().collect()
+        };
+        base_keys.sort();
+
+        for k in base_keys {
+            let (v, _, key_used) = self.get_internal(&k, None);
+            let v = MASK_RE.replace_all(&v, "********************");
+            let context = key_used.replacen(&k, "", 1);
+            if !context.is_empty() {
+                out.push_str(&format!("{k}[{context}]={v}\n"));
+            } else {
+                out.push_str(&format!("{k}={v}\n"));
+            }
+        }
+        out
     }
 }
 
@@ -515,5 +597,219 @@ mod typed_tests {
         assert_eq!(u.scheme(), "postgres");
         assert_eq!(u.host_str(), Some("localhost"));
         assert_eq!(c.get_url("missing").unwrap(), None);
+    }
+}
+
+static GLOBAL: LazyLock<Configuration> = LazyLock::new(init_global);
+static ALT_CONFIGS: LazyLock<Mutex<HashMap<String, &'static Configuration>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn init_global() -> Configuration {
+    let env_file = std::env::var("SETTINGS_ENV_FILE").unwrap_or_else(|_| ".env".to_string());
+    if std::path::Path::new(&env_file).exists() && dotenvy::from_filename(&env_file).is_err() {
+        stdlog("WARN: failed to loading .env file");
+    }
+
+    let context = std::env::var("SETTINGS_CONTEXT").unwrap_or_else(|_| "dev".to_string());
+    let app = std::env::var("SETTINGS_APPLICATION").unwrap_or_default();
+
+    let mut confs = HashMap::new();
+
+    let settings_file = match process_file(&mut confs, "settings.conf") {
+        Ok(Some(p)) => p.display().to_string(),
+        Ok(None) => {
+            stdlog("WARN: No config file 'settings.conf'");
+            "NOT FOUND".to_string()
+        }
+        Err(e) => {
+            stdlog(&format!(
+                "FATAL: Failed to read config file 'settings.conf' - [{e}]"
+            ));
+            std::process::exit(1);
+        }
+    };
+
+    let test_settings_file = match process_file(&mut confs, "settings_test.conf") {
+        Ok(Some(p)) => {
+            let p = p.display().to_string();
+            stdlog(&format!("INFO: Loaded test config file '{p}'"));
+            p
+        }
+        _ => "NOT FOUND".to_string(),
+    };
+
+    let local_settings_file = match process_file(&mut confs, "settings_local.conf") {
+        Ok(Some(p)) => p.display().to_string(),
+        Ok(None) => {
+            stdlog("WARN: No local config file 'settings_local.conf'");
+            "NOT FOUND".to_string()
+        }
+        Err(e) => {
+            stdlog(&format!("FATAL: Failed to read local config - [{e}]"));
+            std::process::exit(1);
+        }
+    };
+
+    let mut c = Configuration::new_with(confs, &context, &app);
+    c.settings_file = settings_file;
+    c.test_settings_file = test_settings_file;
+    c.local_settings_file = local_settings_file;
+
+    start_advertising(&c);
+
+    c
+}
+
+pub fn config() -> &'static Configuration {
+    &GLOBAL
+}
+
+pub fn config_for_context(ctx: &str) -> &'static Configuration {
+    let global = config();
+    if ctx.is_empty() || ctx == global.context {
+        return global;
+    }
+    let mut map = ALT_CONFIGS.lock().unwrap();
+    if let Some(c) = map.get(ctx) {
+        return c;
+    }
+    let copy = Configuration::new_with(global.confs.read().unwrap().clone(), ctx, &global.app);
+    let leaked: &'static Configuration = Box::leak(Box::new(copy));
+    map.insert(ctx.to_string(), leaked);
+    leaked
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdvertPayload {
+    executable: String,
+    service_name: String,
+    loggers: Vec<String>,
+    version: String,
+    commit: String,
+    context: String,
+    application: String,
+    settings_file: String,
+    test_settings_file: String,
+    local_settings_file: String,
+    host: String,
+    address: String,
+    start_time: String,
+    app_payload: serde_json::Map<String, serde_json::Value>,
+}
+
+fn start_advertising(c: &Configuration) {
+    let Some(url) = c.get("advertisingURL").filter(|u| !u.is_empty()) else {
+        return;
+    };
+    let interval_str = c.get_or("advertisingInterval", "1m");
+    stdlog(&format!(
+        "Advertising service every {interval_str} to {url:?}"
+    ));
+
+    let interval = crate::utils::parse_go_duration(&interval_str)
+        .unwrap_or(std::time::Duration::from_secs(60));
+    let start_time = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let host = hostname();
+    let executable = std::env::args().next().unwrap_or_default();
+    let context = c.context.clone();
+    let application = c.app.clone();
+    let settings_file = c.settings_file.clone();
+    let test_settings_file = c.test_settings_file.clone();
+    let local_settings_file = c.local_settings_file.clone();
+
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        loop {
+            let payload = AdvertPayload {
+                executable: executable.clone(),
+                service_name: crate::get_package_name(),
+                loggers: logger_names(),
+                version: crate::get_version(),
+                commit: crate::get_commit(),
+                context: context.clone(),
+                application: application.clone(),
+                settings_file: settings_file.clone(),
+                test_settings_file: test_settings_file.clone(),
+                local_settings_file: local_settings_file.clone(),
+                host: host.clone(),
+                address: crate::get_address(),
+                start_time: start_time.clone(),
+                app_payload: crate::app_payloads(),
+            };
+            let agent = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_millis(500))
+                .build();
+            if let Err(e) = agent.post(&url).send_json(&payload) {
+                stdlog(&format!("Advertising ERROR {e}"));
+            }
+            std::thread::sleep(interval);
+        }
+    });
+}
+
+fn hostname() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "UNKNOWN".to_string())
+}
+
+fn logger_names() -> Vec<String> {
+    Vec::new()
+}
+
+#[cfg(test)]
+mod mutation_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn set_unset_and_listeners() {
+        let c = Configuration::new_with(Default::default(), "dev", "");
+        let hits = Arc::new(AtomicUsize::new(0));
+        let h = hits.clone();
+        c.add_listener(move |_k, _v| {
+            h.fetch_add(1, Ordering::SeqCst);
+        });
+
+        assert_eq!(c.set("k", "v1"), None);
+        assert_eq!(c.set("k", "v2"), Some("v1".to_string()));
+        assert_eq!(c.get("k").unwrap(), "v2");
+        assert_eq!(c.unset("k"), Some("v2".to_string()));
+        assert_eq!(c.get("k"), None);
+        assert_eq!(hits.load(Ordering::SeqCst), 3); // two sets + one unset
+
+        let id = c.add_listener(|_, _| {});
+        c.remove_listener(id);
+    }
+
+    #[test]
+    fn stats_masks_secrets_and_annotates_context() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("name".to_string(), "Simon".to_string());
+        m.insert("name.live".to_string(), "Liam".to_string());
+        m.insert(
+            "secret".to_string(),
+            "*EHE*8f7d64a1f1cefb44fe280d40bfe056ebd3aff457dd551ab8edf5d213cf9c".to_string(),
+        );
+        let c = Configuration::new_with(m, "live", "");
+        let s = c.stats();
+        assert!(s.contains("name[.live]=Liam"));
+        assert!(!s.contains("8f7d64a1")); // ciphertext masked
+        assert!(s.contains("Context:     live"));
+    }
+
+    #[test]
+    fn get_all_includes_context_meta() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("a".to_string(), "1".to_string());
+        let c = Configuration::new_with(m, "dev", "");
+        let all = c.get_all();
+        assert_eq!(all.get("_SETTINGS_CONTEXT").unwrap(), "dev");
+        assert_eq!(all.get("a").unwrap(), "1");
     }
 }

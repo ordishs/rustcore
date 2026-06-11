@@ -14,7 +14,6 @@ type PayloadFn = Box<dyn Fn() -> serde_json::Value + Send + Sync>;
 static APP_PAYLOAD_FNS: LazyLock<RwLock<HashMap<String, PayloadFn>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
-#[allow(dead_code)]
 pub(crate) static SHOW_STD_TIMESTAMP: AtomicBool = AtomicBool::new(true);
 
 pub fn set_info(name: &str, version: &str, commit: &str) {
@@ -57,7 +56,6 @@ pub fn add_app_payload_fn(key: &str, f: impl Fn() -> serde_json::Value + Send + 
         .insert(key.to_string(), Box::new(f));
 }
 
-#[allow(dead_code)]
 pub(crate) fn app_payloads() -> serde_json::Map<String, serde_json::Value> {
     APP_PAYLOAD_FNS
         .read()
@@ -68,7 +66,6 @@ pub(crate) fn app_payloads() -> serde_json::Map<String, serde_json::Value> {
 }
 
 /// Internal stderr logger matching Go's `log.Printf` default format.
-#[allow(dead_code)]
 pub(crate) fn stdlog(msg: &str) {
     if SHOW_STD_TIMESTAMP.load(Ordering::Relaxed) {
         eprintln!(
@@ -84,9 +81,6 @@ pub(crate) fn stdlog(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[allow(unused_imports)]
-    use std::sync::atomic::Ordering;
 
     #[test]
     fn package_info_defaults_and_set() {
