@@ -72,10 +72,19 @@ mod tests {
     #[test]
     fn durations() {
         assert_eq!(parse_go_duration("0").unwrap(), Duration::ZERO);
-        assert_eq!(parse_go_duration("500ms").unwrap(), Duration::from_millis(500));
+        assert_eq!(
+            parse_go_duration("500ms").unwrap(),
+            Duration::from_millis(500)
+        );
         assert_eq!(parse_go_duration("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(parse_go_duration("1h30m").unwrap(), Duration::from_secs(5400));
-        assert_eq!(parse_go_duration("1.5h").unwrap(), Duration::from_secs(5400));
+        assert_eq!(
+            parse_go_duration("1h30m").unwrap(),
+            Duration::from_secs(5400)
+        );
+        assert_eq!(
+            parse_go_duration("1.5h").unwrap(),
+            Duration::from_secs(5400)
+        );
         assert_eq!(parse_go_duration("2µs").unwrap(), Duration::from_micros(2));
         assert!(parse_go_duration("5x").is_err());
         assert!(parse_go_duration("").is_err());
@@ -84,9 +93,9 @@ mod tests {
 
     #[test]
     fn bools() {
-        assert_eq!(parse_go_bool("true").unwrap(), true);
-        assert_eq!(parse_go_bool("1").unwrap(), true);
-        assert_eq!(parse_go_bool("F").unwrap(), false);
+        assert!(parse_go_bool("true").unwrap());
+        assert!(parse_go_bool("1").unwrap());
+        assert!(!parse_go_bool("F").unwrap());
         assert!(parse_go_bool("yes").is_err());
     }
 }

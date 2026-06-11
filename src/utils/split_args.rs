@@ -47,7 +47,10 @@ mod tests {
     #[test]
     fn splits() {
         assert_eq!(split_args("").unwrap(), vec![""]);
-        assert_eq!(split_args("config get key").unwrap(), vec!["config", "get", "key"]);
+        assert_eq!(
+            split_args("config get key").unwrap(),
+            vec!["config", "get", "key"]
+        );
         assert_eq!(
             split_args("set key \"a value\"").unwrap(),
             vec!["set", "key", "a value"]

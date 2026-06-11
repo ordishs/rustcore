@@ -51,7 +51,10 @@ mod tests {
         assert_eq!(human_time(Duration::from_secs(1)), "1 second");
         assert_eq!(human_time(Duration::from_secs(2)), "2 seconds");
         assert_eq!(human_time(Duration::from_secs(61)), "1 minute 1 second");
-        assert_eq!(human_time(Duration::from_secs(3600)), "1 hour 0 minute 0 second");
+        assert_eq!(
+            human_time(Duration::from_secs(3600)),
+            "1 hour 0 minute 0 second"
+        );
         assert_eq!(
             human_time(Duration::from_secs(90061)),
             "1 day 1 hour 1 minute 1 second"

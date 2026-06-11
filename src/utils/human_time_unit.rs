@@ -49,7 +49,10 @@ mod tests {
         assert_eq!(human_time_unit(Duration::from_nanos(3)), "3ns");
         assert_eq!(human_time_unit(Duration::from_nanos(3_455)), "3.46µs");
         assert_eq!(human_time_unit(Duration::from_nanos(3_455_555)), "3.46ms");
-        assert_eq!(human_time_unit(Duration::from_nanos(3_455_555_000)), "3.46s");
+        assert_eq!(
+            human_time_unit(Duration::from_nanos(3_455_555_000)),
+            "3.46s"
+        );
         assert_eq!(human_time_unit(Duration::from_secs(65)), "1m5s");
         assert_eq!(human_time_unit(Duration::from_secs(3665)), "1h1m5s");
         assert_eq!(human_time_unit(Duration::from_secs(90065)), "1d1h1m5s");
