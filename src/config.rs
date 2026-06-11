@@ -758,7 +758,7 @@ fn hostname() -> String {
 }
 
 fn logger_names() -> Vec<String> {
-    Vec::new()
+    crate::logger::registered_names()
 }
 
 #[cfg(test)]

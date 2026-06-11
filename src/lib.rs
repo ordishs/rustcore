@@ -1,5 +1,10 @@
 pub mod config;
+pub mod logger;
+pub mod sampler;
+pub mod socket;
 pub mod utils;
+
+pub use logger::{log, Level, Logger};
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
