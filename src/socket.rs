@@ -10,7 +10,7 @@ use crate::utils::split_args;
 static NEXT_CONN_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn start_socket_listener(logger: &'static Logger) -> std::io::Result<()> {
-    let socket_dir = config().get_or("socketDIR", "/tmp/gocore");
+    let socket_dir = config().get_or("socketDIR", "/tmp/rustcore");
     if let Err(e) = std::fs::create_dir_all(&socket_dir) {
         stdlog(&format!(
             "ERROR: Unable to make socket directory {socket_dir}: {e}"

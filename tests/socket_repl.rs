@@ -4,7 +4,7 @@ use std::os::unix::net::UnixStream;
 #[test]
 fn repl_session() {
     let _logger = rustcore::log("repltest");
-    let path = "/tmp/gocore/REPLTEST.sock";
+    let path = "/tmp/rustcore/REPLTEST.sock";
 
     // listener starts on a thread; retry connect briefly
     let mut stream = None;

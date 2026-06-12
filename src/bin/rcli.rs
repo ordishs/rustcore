@@ -3,7 +3,7 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 fn main() {
-    let mut socket_dir = "/tmp/gocore".to_string();
+    let mut socket_dir = "/tmp/rustcore".to_string();
     let mut package_name = String::new();
     let mut keep_alive = false;
     let mut rest: Vec<String> = Vec::new();
@@ -43,7 +43,7 @@ fn main() {
         match socks.len() {
             1 => socks.into_iter().next().unwrap(),
             0 => {
-                eprintln!("No gocore processes are running.");
+                eprintln!("No rustcore processes are running.");
                 std::process::exit(1);
             }
             n => {

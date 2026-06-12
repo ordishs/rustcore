@@ -2,7 +2,7 @@
 
 rustcore is a Rust library of tools for configuring microservices and providing logging. It includes an embedded web front end for statistics and the ability to modify configuration settings without restarting the microservice itself.
 
-It is a complete, file-and-wire-compatible rewrite of [gocore](https://github.com/ordishs/gocore). It reads the same settings files, uses the same context-fallback logic, the same `*EHE*` encrypted values, and shares the same `/tmp/gocore` Unix socket directory — so a single `rcli` (or the Go `gcli`) can administer both Go and Rust services running side by side.
+It is a complete, file-and-wire-compatible rewrite of [gocore](https://github.com/ordishs/gocore). It reads the same settings files, uses the same context-fallback logic, the same `*EHE*` encrypted values, and speaks the same Unix socket admin protocol. Rust services listen under `/tmp/rustcore` by default; set `socketDIR=/tmp/gocore` to share gocore's directory so a single `rcli` (or the Go `gcli`) can administer both Go and Rust services side by side.
 
 The library is split into a few components:
 
@@ -151,10 +151,10 @@ Log levels (from lowest to highest): `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`, 
 
 The log level is read from the `logLevel` setting (defaulting to `INFO`). Lines are written to stderr with timestamp, file:line, package name, level, and message.
 
-The logger creates a Unix socket at `/tmp/gocore/MYSERVICE.sock` (the package name uppercased). You can connect to it with:
+The logger creates a Unix socket at `/tmp/rustcore/MYSERVICE.sock` (the package name uppercased). You can connect to it with:
 
 ```
-nc -U /tmp/gocore/MYSERVICE.sock
+nc -U /tmp/rustcore/MYSERVICE.sock
 ```
 
 or use `rcli`:
@@ -181,7 +181,7 @@ Example — raise trace verbosity live:
 cargo run --bin rcli -- -packageName MYSERVICE -keepAlive trace on
 ```
 
-The same `rcli` binary works against gocore services over the same socket protocol.
+The same `rcli` binary works against gocore services too: `rcli -socketDir /tmp/gocore ...` (or set `socketDIR=/tmp/gocore` in your services to keep everything in one directory).
 
 ### Running the logger example
 
@@ -198,7 +198,7 @@ In another:
 ./target/debug/rcli -packageName EXAMPLE -keepAlive trace on
 ```
 
-When done, kill the logger process; the socket at `/tmp/gocore/EXAMPLE.sock` is cleaned up automatically.
+When done, kill the logger process; the socket at `/tmp/rustcore/EXAMPLE.sock` is cleaned up automatically.
 
 
 ## Stats
@@ -264,7 +264,7 @@ rustcore is designed to be a drop-in companion to gocore:
 - Same `SETTINGS_CONTEXT` fallback algorithm
 - Same `SETTINGS_APPLICATION` per-app overrides
 - Same `*EHE*` AES-256-GCM encrypted values (same key, same wire format)
-- Same `/tmp/gocore/NAME.sock` Unix socket protocol — `rcli` and `gcli` are interchangeable
+- Same Unix socket admin protocol — `rcli` and `gcli` are interchangeable (default directory is `/tmp/rustcore`; set `socketDIR=/tmp/gocore` to share gocore's)
 - Same advertising beacon POST payload format
 
 
